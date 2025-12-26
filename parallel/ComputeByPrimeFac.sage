@@ -112,7 +112,7 @@ def clean_fac(a, b_fac):
     return a, new_b_fac, new_b
 
 def trim_matrix(M):
-     """Remove the last column of a numpy matrix"""
+    """Remove the last column of a numpy matrix"""
     return np.delete(M, -1, axis=1)
 
 def build_matrix(primes_to_check, primes_to_use, m, l, t, B, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX):
@@ -224,19 +224,20 @@ def worker(args):
         return results_out, len(cr_cache), len(prime_above_cache)
     return results_out
 
-def main_parallel(number_of_primes,
-            N,
-            num_1_mod_3,
-            num_2_mod_3,
-            out_file,
-            batch_size=2000,
-            nprocesses=min(os.cpu_count(), 32),
-            cache_limits=(10_000, 10_000),
-            debug=False,
-            primes=None,
-            prime_above_cache=None
-        ):
-
+def main_parallel(
+    number_of_primes,
+    N,
+    num_1_mod_3,
+    num_2_mod_3,
+    out_file,
+    batch_size=2000,
+    nprocesses=min(os.cpu_count(), 32),
+    cache_limits=(10_000, 10_000),
+    debug=False,
+    primes=None,
+    prime_above_cache=None,
+    aggregate_every=10
+):
     if nprocesses is None:
         nprocesses = cpu_count()
 
@@ -250,9 +251,6 @@ def main_parallel(number_of_primes,
 
     CR_MAX, PRIME_MAX = cache_limits
 
-    prime_above_cache = {int(p): prime_above(p) for p in p1}
-
-
     batches = [
         (min(batch_size, N - i), p1, p2, num_1_mod_3, num_2_mod_3, cache_limits, prime_above_cache, debug)
         for i in range(0, N, batch_size)
@@ -261,44 +259,64 @@ def main_parallel(number_of_primes,
     out_path = Path(out_file)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    with Pool(processes=nprocesses) as pool, open(out_path, "a") as f:
+
+    temp_files = []
+
+    with Pool(processes=nprocesses) as pool:
         for batch_id, result in enumerate(pool.imap_unordered(worker, batches, chunksize=1)):
-            if debug:
-                results_out, cr_size, prime_size = result
-            else:
-                results_out = result
+            results_out = result if not debug else result[0]
 
-            for rec in results_out:
-                f.write(json.dumps(rec) + "\n")
-            f.flush()
-            combine_counts_in_file(out_file)
-
-            if batch_id % 10 == 0:
+            # Write each batch to a separate temp file
+            temp_file = out_path.parent / f"{out_path.stem}_batch{batch_id}.tmp"
+            temp_files.append(temp_file)
+            with open(temp_file, "w") as f:
+                for rec in results_out:
+                    f.write(json.dumps(rec) + "\n")
+            
+            # Periodic aggregation
+            if (batch_id + 1) % aggregate_every == 0:
+                _aggregate_temp_files(temp_files, out_path)
+                temp_files = []  # reset temp file list
                 if debug:
-                    print(f"[batch {batch_id}] cache sizes: cr={cr_size}, prime={prime_size}")
-                else:
                     print(f"[batch {batch_id}] checkpointed")
+
+    # Final aggregation for any remaining temp files
+    if temp_files:
+        _aggregate_temp_files(temp_files, out_path)
 
     print("Finished all batches.")
 
-def combine_counts_in_file(file_path):
+
+
+def _aggregate_temp_files(temp_files, out_file):
+    """Read all temp files, aggregate counts, and safely write to main file."""
     agg_counts = defaultdict(int)
-    temp_path = file_path + ".tmp"
 
-    # Read all lines and aggregate
-    with open(file_path) as f:
-        for line in f:
-            rec = json.loads(line)
-            key = (tuple(rec["pair"]), rec["matrix"])
-            agg_counts[key] += rec["count"]
+    # Read all temp files
+    for temp_file in temp_files:
+        with open(temp_file, "r") as f:
+            for line in f:
+                rec = json.loads(line)
+                key = (tuple(rec["pair"]), rec["matrix"])
+                agg_counts[key] += rec["count"]
+        os.remove(temp_file)  # remove temp file after reading
 
-    # Overwrite the file with aggregated counts
-    with open(temp_path, "w") as f:
+    # Merge with existing main file if it exists
+    if Path(out_file).exists():
+        with open(out_file, "r") as f:
+            for line in f:
+                rec = json.loads(line)
+                key = (tuple(rec["pair"]), rec["matrix"])
+                agg_counts[key] += rec["count"]
+
+    # Write aggregated data safely
+    temp_out = str(out_file) + ".agg.tmp"
+    with open(temp_out, "w") as f:
         for (pair, matrix), count in agg_counts.items():
             f.write(json.dumps({"pair": list(pair), "matrix": matrix, "count": count}) + "\n")
 
-    os.replace(temp_path, file_path)
-    print(f"Aggregated counts written to {file_path}")
+    os.replace(temp_out, out_file)
+    print(f"[INFO] Aggregated counts written to {out_file}")
 
 # -------------------------
 # Batch and cache estimation
@@ -435,7 +453,7 @@ if __name__ == "__main__":
         num_1_mod_3=num_1_mod_3,
         num_2_mod_3=num_2_mod_3,
         out_file=out_file,
-        batch_size=batch_size,
+        batch_size=10,#batch_size,
         nprocesses=min(os.cpu_count(), 64),
         cache_limits=(CR_MAX, PRIME_MAX),
         debug=True,
