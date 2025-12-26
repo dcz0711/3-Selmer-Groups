@@ -129,7 +129,14 @@ def generate_primes(num_of_primes):
         (p1 if p % 3 == 1 else p2).append(p)
     return p1, p2
 
-def generate_random_B(p1, p2, num_1_mod_3, num_2_mod_3, H):
+def generate_random_A(B, delta=0.1):
+    """
+        Choose A at random with roughly the same height as B.
+    """
+    height = int((B^(1/3)))
+    return random.randint(int((1-delta)*height), int((1+delta)*height)) * random.choice([1,-1])
+
+def generate_random_A_B(p1, p2, num_1_mod_3, num_2_mod_3):
     B = 1
     
     prime_sample = random.sample(p1, num_1_mod_3) + random.sample(p2, num_2_mod_3)
@@ -137,24 +144,20 @@ def generate_random_B(p1, p2, num_1_mod_3, num_2_mod_3, H):
     
     B = prod([p^exp for p, exp in B_fac])
     
-    pairs = []
-    for A in range(-H, H + 1):
+    while True:
+        A = generate_random_A(B)
         if A % 3 == 0:
             continue
         newA, newB_fac, newB = clean_fac(A, B_fac)
-        if A != newA or B != newB:
+        if B != newB:
             continue
-        pairs.append((newA, newB_fac, newB))
-    return pairs
-
-def computeRandomByPrimeFac(p1, p2, num_1_mod_3, num_2_mod_3, H, prime_above_cache, cr_cache, PRIME_MAX, CR_MAX):
-    pairs = generate_random_B(p1, p2, num_1_mod_3, num_2_mod_3, H)
-    output = []
-    for newA, newB_fac, newB in pairs:
-        l, m, mat = solve_fac(newB, newB_fac, newA, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX)
-        compressed = ''.join(str(num) for row in mat for num in row)
-        output.append(((l - m, m), compressed))
-    return output
+        return newA, newB_fac, newB
+        
+def computeRandomByPrimeFac(p1, p2, num_1_mod_3, num_2_mod_3, prime_above_cache, cr_cache, PRIME_MAX, CR_MAX):
+    newA, newB_fac, newB = generate_random_A_B(p1, p2, num_1_mod_3, num_2_mod_3)
+    l, m, mat = solve_fac(newB, newB_fac, newA, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX)
+    compressed = ''.join(str(num) for row in mat for num in row)
+    return int(l - m), int(m), compressed
 
 def random_exponent(p):
     """
@@ -173,25 +176,19 @@ def random_exponent(p):
 
 def worker(args):
     (num_iterations, p1, p2, num_1_mod_3, num_2_mod_3,
-     H, cache_limits, debug) = args
+      cache_limits, prime_above_cache, debug) = args
 
     CR_MAX, PRIME_MAX = cache_limits
 
     # local caches
     cr_cache = {}
-    prime_above_cache_local = {int(p): prime_above(p) for p in p1}
 
     # batch-level counting
     batch_counts = defaultdict(int)
 
     for _ in range(num_iterations):
-        pairs = generate_random_B(p1, p2, num_1_mod_3, num_2_mod_3, H)
-        for newA, newB_fac, newB in pairs:
-            l, m, mat = solve_fac(newB, newB_fac, newA,
-                                  prime_above_cache_local, cr_cache, CR_MAX, PRIME_MAX)
-            compressed = ''.join(str(num) for row in mat for num in row)
-            key = (int(l - m), int(m), compressed)
-            batch_counts[key] += 1
+        key = computeRandomByPrimeFac(p1, p2, num_1_mod_3, num_2_mod_3, prime_above_cache, cr_cache, PRIME_MAX, CR_MAX)
+        batch_counts[key] += 1
 
     # convert to JSON-friendly format
     results_out = [
@@ -200,7 +197,7 @@ def worker(args):
     ]
     
     if debug:
-        return results_out, len(cr_cache), len(prime_above_cache_local)
+        return results_out, len(cr_cache), len(prime_above_cache)
     return results_out
 
 def main_parallel(number_of_primes,
@@ -229,11 +226,11 @@ def main_parallel(number_of_primes,
 
     CR_MAX, PRIME_MAX = cache_limits
 
-    H = max(10, int(ceil(log(num_1_mod_3 + num_2_mod_3))))
+    prime_above_cache = {int(p): prime_above(p) for p in p1}
 
 
     batches = [
-        (min(batch_size, N - i), p1, p2, num_1_mod_3, num_2_mod_3, H, cache_limits, debug)
+        (min(batch_size, N - i), p1, p2, num_1_mod_3, num_2_mod_3, cache_limits, prime_above_cache, debug)
         for i in range(0, N, batch_size)
     ]
 
@@ -303,11 +300,11 @@ def estimate_optimal_batch_size(number_of_primes, primes=None, prime_above_cache
     small_batch_size = 100
     start_mem = psutil.Process(os.getpid()).memory_info().rss
     start_time = time.time()
-
-    _ = computeRandomByPrimeFac(
-        p1, p2, num_1_mod_3, num_2_mod_3, H,
-        prime_above_cache, cr_cache, PRIME_MAX, CR_MAX
-    )
+    
+    for _ in range(small_batch_size):
+        computeRandomByPrimeFac(
+            p1, p2, num_1_mod_3, num_2_mod_3,
+            prime_above_cache, cr_cache, PRIME_MAX, CR_MAX)
 
     end_time = time.time()
     end_mem = psutil.Process(os.getpid()).memory_info().rss
@@ -337,18 +334,16 @@ def estimate_cache_sizes(number_of_primes, primes=None, prime_above_cache=None,
             num_2_mod_3=2):
 
     p1, p2 = primes
-
-    H = max(10, int(ceil(log(num_1_mod_3 + num_2_mod_3))))
     
-
     CR_MAX_TEST, PRIME_MAX_TEST = 100, 100
     cr_cache = {}
 
     start_mem = psutil.Process(os.getpid()).memory_info().rss
-    _ = computeRandomByPrimeFac(
-        p1, p2, num_1_mod_3, num_2_mod_3, H,
-        prime_above_cache, cr_cache, PRIME_MAX_TEST, CR_MAX_TEST
-    )
+    
+    for _ in range(100):
+        computeRandomByPrimeFac(
+            p1, p2, num_1_mod_3, num_2_mod_3,
+            prime_above_cache, cr_cache, PRIME_MAX_TEST, CR_MAX_TEST)
     end_mem = psutil.Process(os.getpid()).memory_info().rss
 
     mem_used = max(end_mem - start_mem, 1e6)
