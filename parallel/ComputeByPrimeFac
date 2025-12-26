@@ -13,8 +13,11 @@ import psutil
 from collections import defaultdict
 import argparse
 
+# -------------------------
+# Algebraic setup
+# -------------------------
 
-
+# Working in cyclotomic field Q(ω) where ω is a primitive 3rd root of unity
 K.<ω> = CyclotomicField(3)
 O = K.ring_of_integers()
 
@@ -33,40 +36,64 @@ def residue_map(π):
     return red, w, e, one
 
 def prime_above(p):
-    """Return a prime above a rational prime p in O"""
+    """
+    Return a prime above a rational prime p in O.
+    The output is (a, b) such that a + bω is a generator of the ideal pi above p
+    """
     if p % 3 == 2:
         return (p, 0)
     factor = O(p).factor()[0][0]
     return (int(factor[0]), int(factor[1]))
 
 def get_prime_above(p, prime_above_cache, PRIME_MAX):
+    """
+      Retrieve prime above p from cache or compute if not present.
+      Caches up to PRIME_MAX entries.
+     """
     if p % 3 == 2:
         return (p, 0)
+        
     if p in prime_above_cache:
         return prime_above_cache[p]
+        
     value = prime_above(p)
     if len(prime_above_cache) < PRIME_MAX:
         prime_above_cache[p] = value
+        
     return value
 
 def cubic_residue(a, p, cr_cache, prime_above_cache, CR_MAX, PRIME_MAX):
+    """
+        Compute the cubic residue of a modulo p in O.
+        Uses caches to speed up repeated queries.
+        Returns 0,1,2 based on cubic residue class.
+    """
     key = (int(a), int(p))
     if (res := cr_cache.get(key)) is not None:
         return res
+        
     a = O(a)
     x, y = get_prime_above(p, prime_above_cache, PRIME_MAX)
     π = O(x + ω*y)
+    
     red, w, e, one = residue_map(π)
+    
     res = 0 if red(a) == 0 else (
         0 if (r := red(a) ** e) == one else
         1 if r == w else
         2
     )
+    
     if len(cr_cache) < CR_MAX:
         cr_cache[key] = int(res)
     return int(res)
 
 def clean_fac(a, b_fac):
+    """
+        Adjust the factorization of B relative to A.
+        If a prime p^3 divides B and p divides A, reduce powers in B accordingly.
+        Returns updated (A, B factorization, B).
+    """
     new_b_fac = []
     new_b = 1
     new_a = a
@@ -85,6 +112,7 @@ def clean_fac(a, b_fac):
     return a, new_b_fac, new_b
 
 def trim_matrix(M):
+     """Remove the last column of a numpy matrix"""
     return np.delete(M, -1, axis=1)
 
 def build_matrix(primes_to_check, primes_to_use, m, l, t, B, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX):
@@ -123,6 +151,7 @@ def solve_fac(B, B_fac, A, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX):
     return build_matrix(primes_to_check, primes_to_use, m, l, t, B, prime_above_cache, cr_cache, CR_MAX, PRIME_MAX)
 
 def generate_primes(num_of_primes):
+    """Generate lists of the first num_of_primes primes ≡ 1 mod 3 and ≡ 2 mod 3."""
     p1, p2 = [], []
     for i in range(num_of_primes):
         p = nextprime(3, i + 1)
@@ -161,13 +190,8 @@ def computeRandomByPrimeFac(p1, p2, num_1_mod_3, num_2_mod_3, prime_above_cache,
 
 def random_exponent(p):
     """
-        Sample a random exponent e >= 1 for a given prime p, with the distribution
-
-            P(e = k) = (1 - 1/p) * p^{-(k-1)}.
-    
-        The probability that p^k divides N given that p^{k-1} divides N is 1/p. So
-        start with e = 1, i.e. assuming that p | N. For each e, ask whether or not
-        p^{e + 1} dives N, an even that occurs with probability 1/p.
+        Sample a random exponent e >= 1 for prime p.
+        Probability distribution: P(e = k) = (1 - 1/p) * p^{-(k-1)}
     """
     return 1 + int(log(random.random()) / log(1/p))
 # -------------------------
