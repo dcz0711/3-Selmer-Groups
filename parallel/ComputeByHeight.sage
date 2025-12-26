@@ -206,52 +206,70 @@ def main_parallel(H,
 
     out_path = Path(out_file)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_files = []
 
-    with Pool(processes=nprocesses) as pool, open(out_path, "a") as f:
+    with Pool(processes=nprocesses) as pool:
         for batch_id, result in enumerate(pool.imap_unordered(worker, batches, chunksize=1)):
-            if debug:
-                results_out, cr_size, prime_size = result
-            else:
-                results_out = result
+            results_out = result if not debug else result[0]
 
-            for rec in results_out:
-                f.write(json.dumps(rec) + "\n")
-            f.flush()
-            combine_counts_in_file(out_file)
-
-            if batch_id % 10 == 0:
+            # Write each batch to a separate temp file
+            temp_file = out_path.parent / f"{out_path.stem}_batch{batch_id}.tmp"
+            temp_files.append(temp_file)
+            with open(temp_file, "w") as f:
+                for rec in results_out:
+                    f.write(json.dumps(rec) + "\n")
+            
+            # Periodic aggregation
+            if (batch_id + 1) % aggregate_every == 0:
+                _aggregate_temp_files(temp_files, out_path)
+                temp_files = []  # reset temp file list
                 if debug:
-                    print(f"[batch {batch_id}] cache sizes: cr={cr_size}, prime={prime_size}")
-                else:
-                    print(f"[batch {batch_id}] checkpointed")
+                    print(f"[batch {batch_id}] checkpointed, cache sizes: cr={cr_size}, prime={prime_size}")
+
+    # Final aggregation for any remaining temp files
+    if temp_files:
+        _aggregate_temp_files(temp_files, out_path)
 
     print("Finished all batches.")
 
-def combine_counts_in_file(file_path):
+
+
+def _aggregate_temp_files(temp_files, out_file):
+    """Read all temp files, aggregate counts, and safely write to main file."""
     agg_counts = defaultdict(int)
-    temp_path = file_path + ".tmp"
 
-    # Read all lines and aggregate
-    with open(file_path) as f:
-        for line in f:
-            rec = json.loads(line)
-            key = (tuple(rec["pair"]), rec["matrix"])
-            agg_counts[key] += rec["count"]
+    # Read all temp files
+    for temp_file in temp_files:
+        with open(temp_file, "r") as f:
+            for line in f:
+                rec = json.loads(line)
+                key = (tuple(rec["pair"]), rec["matrix"])
+                agg_counts[key] += rec["count"]
+        os.remove(temp_file)  # remove temp file after reading
 
-    # Overwrite the file with aggregated counts
-    with open(temp_path, "w") as f:
+    # Merge with existing main file if it exists
+    if Path(out_file).exists():
+        with open(out_file, "r") as f:
+            for line in f:
+                rec = json.loads(line)
+                key = (tuple(rec["pair"]), rec["matrix"])
+                agg_counts[key] += rec["count"]
+
+    # Write aggregated data safely
+    temp_out = str(out_file) + ".agg.tmp"
+    with open(temp_out, "w") as f:
         for (pair, matrix), count in agg_counts.items():
             f.write(json.dumps({"pair": list(pair), "matrix": matrix, "count": count}) + "\n")
 
-    os.replace(temp_path, file_path)
-    print(f"Aggregated counts written to {file_path}")
+    os.replace(temp_out, out_file)
+    print(f"[INFO] Aggregated counts written to {out_file}")
 
 # -------------------------
 # Batch and cache estimation
 # -------------------------
 def estimate_optimal_batch_size(H, a, cache_limits=(20_000, 20_000),
                                 nprocesses=None, safe_fraction=0.5,
-                                target_batch_seconds=30):
+                                target_batch_seconds=30,total_mem=None):
 
     if nprocesses is None:
         nprocesses = min(cpu_count(), 4)
@@ -278,7 +296,8 @@ def estimate_optimal_batch_size(H, a, cache_limits=(20_000, 20_000),
     mem_per_item = max(end_mem - start_mem, 1e6) / small_batch_size
     time_per_item = (end_time - start_time) / small_batch_size
 
-    total_mem = psutil.virtual_memory().total
+    if not total_mem:
+        total_mem = psutil.virtual_memory().total
     safe_mem = total_mem * safe_fraction
 
     memory_limited_batch = int(safe_mem / mem_per_item)
@@ -294,7 +313,7 @@ def estimate_optimal_batch_size(H, a, cache_limits=(20_000, 20_000),
 
     return optimal_batch
 
-def estimate_cache_sizes(H, a, safe_fraction=0.5):
+def estimate_cache_sizes(H, a, safe_fraction=0.5,total_mem=None):
     CR_MAX_TEST, PRIME_MAX_TEST = 100, 100
     cr_cache = {}
     prime_above_cache = {}
@@ -319,7 +338,8 @@ def estimate_cache_sizes(H, a, safe_fraction=0.5):
     mem_per_cr = mem_used / n_cr_entries
     mem_per_prime = mem_used / n_prime_entries
 
-    total_mem = psutil.virtual_memory().total
+    if not total_mem:
+        total_mem = psutil.virtual_memory().total
     safe_mem = total_mem * safe_fraction
 
     cr_cache_size = int(safe_mem * 2 / 3 / mem_per_cr)
@@ -338,20 +358,21 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num1", type=int, required=True)
     parser.add_argument("--num2", type=int, required=True)
+    parser.add_argument("--mem", type=int, required=False)
 
     args = parser.parse_args()
 
     H = args.num1
     a = args.num2
-  
+    total_mem = args.mem
 
 
     out_file = f"data/checkpoint_{H}_{a}.jsonl"
 
     # Estimate batch size and cache sizes
-    batch_size = estimate_optimal_batch_size(H,a,nprocesses=min(os.cpu_count(), 64),)
+    batch_size = estimate_optimal_batch_size(H,a,nprocesses=min(os.cpu_count(), 64),total_mem=total_mem)
     
-    CR_MAX, PRIME_MAX = estimate_cache_sizes(H,a)
+    CR_MAX, PRIME_MAX = estimate_cache_sizes(H,a,total_mem=total_mem)
         
     print(f"Running H={H}, a={a} "
           f"batch_size={batch_size}, CR_MAX={CR_MAX}, PRIME_MAX={PRIME_MAX}")
