@@ -279,7 +279,7 @@ def generate_random_a(b_value, delta=0.1, method="height"):
     Three sampling methods:
     - "height": Sample |A| ∈ [(1-δ)H, (1+δ)H] with random sign
     - "box": Sample A ∈ [-(1+δ)H, (1+δ)H]
-    - "ignore height": Sample A ∈ [-B, B]
+    - "ignore_height": Sample A ∈ [-B, B]
     
     Args:
         b_value: Value of B (determines height)
@@ -296,7 +296,7 @@ def generate_random_a(b_value, delta=0.1, method="height"):
         low = int(-(1 + delta) * height)
         high = int((1 + delta) * height)
         sign = 1
-    elif method == "ignore height":
+    elif method == "ignore_height":
         # Full range up to B
         low = int(-b_value)
         high = int(b_value)
@@ -559,9 +559,13 @@ def compute_selmer_matrix(b_value, b_factorization, a_value, cubic_residue_func)
         b_value, cubic_residue_func
     )
     
-    # Flatten to string for compact storage
-    # Each entry is a single digit (0, 1, or 2)
-    matrix_string = ''.join(str(element) for row in matrix for element in row)
+    if matrix is not None:
+        # Flatten to string for compact storage
+        # Each entry is a single digit (0, 1, or 2)
+        matrix_string = ''.join(str(element) for row in matrix for element in row)
+    
+    else:
+        return None, None, None
     
     return int(num_rows), int(num_cols), matrix_string
 
@@ -959,7 +963,6 @@ if __name__ == "__main__":
     
     primes = primes_first_n(args.primes + 2)[2:]  # Skip 2,3
 
-
     run_parallel(
         primes=primes,
         num_trials=args.trials,
@@ -971,5 +974,4 @@ if __name__ == "__main__":
         cache_fraction=0.5,
         num_processes=args.nprocesses
     )
-    
 
