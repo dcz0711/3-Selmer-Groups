@@ -468,6 +468,11 @@ def build_selmer_matrix(check_primes, basis_primes, num_dividing_a,
     """
     num_rows = len(check_primes)
     num_cols = len(basis_primes)
+    
+    # There are too many n x m matrices to see any meaningful distribution
+    if num_rows * num_cols > 12:
+        return num_rows, num_cols, None
+    
     matrix = np.empty((num_rows, num_cols), dtype=int)
     
     for i in range(num_rows):
@@ -576,11 +581,15 @@ def compute_random_instance(primes, num_factors, cubic_residue_func, method="hei
     Returns:
         (num_rows, num_cols, matrix_string) characterizing the Selmer group
     """
-    # Generate random curve parameters
-    a, b_factorization, b = generate_random_a_b_pair(primes, num_factors, method)
+    matrix_str = None
     
-    # Compute and return Selmer matrix
-    return compute_selmer_matrix(b, b_factorization, a, cubic_residue_func)
+    while matrix_str == None:
+        # Generate random curve parameters
+        a, b_factorization, b = generate_random_a_b_pair(primes, num_factors, method)
+        
+        num_rows, num_cols, matrix_str = compute_selmer_matrix(b, b_factorization, a, cubic_residue_func)
+    
+    return num_rows, num_cols, matrix_str
 
 # ============================================================
 # MEMORY MANAGEMENT
@@ -949,12 +958,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     primes = primes_first_n(args.primes + 2)[2:]  # Skip 2,3
-    
-    import cProfile
-    import pstats
-    from pstats import SortKey
-    
-   run_parallel(
+
+
+    run_parallel(
         primes=primes,
         num_trials=args.trials,
         num_factors=args.factors,
@@ -965,6 +971,5 @@ if __name__ == "__main__":
         cache_fraction=0.5,
         num_processes=args.nprocesses
     )
-
-  
+    
 
