@@ -222,6 +222,7 @@ def compute_selmer_matrix(B_value, B_factorization, A_value, cubic_residue_symbo
             return int(num_rows), int(num_cols), ""
 
         matrix_string = "".join(str(int(x)) for x in matrix.ravel())
+
         return int(num_rows), int(num_cols), matrix_string
     
     else: 
@@ -231,7 +232,7 @@ def compute_selmer_matrix(B_value, B_factorization, A_value, cubic_residue_symbo
 # Cache sizing
 # =============================================================================
 
-def compute_cache_limits(memory_fraction=0.5):
+def compute_cache_limits(memory_fraction=0.5, num_processes=1):
     """
     Choose per-process LRU cache sizes from available RAM.
 
@@ -250,16 +251,16 @@ def compute_cache_limits(memory_fraction=0.5):
     cube_root_cache_size : int
         Maximum number of cached cube-root auxiliary data values.
     """
-    available_bytes = psutil.virtual_memory().available * float(memory_fraction)
+    available_bytes_total = psutil.virtual_memory().available
+    # budget per worker
+    per_worker_bytes = (available_bytes_total * float(memory_fraction)) / max(1, int(num_processes))
 
-    # Coarse per-entry estimates (Python object overhead dominates).
     bytes_per_cube_root_entry = 200
     bytes_per_cubic_residue_entry = 300
 
-    cube_root_cache_size = int(available_bytes * 0.25 / bytes_per_cube_root_entry)
-    cubic_residue_cache_size = int(available_bytes * 0.75 / bytes_per_cubic_residue_entry)
+    cube_root_cache_size = int(per_worker_bytes * 0.25 / bytes_per_cube_root_entry)
+    cubic_residue_cache_size = int(per_worker_bytes * 0.75 / bytes_per_cubic_residue_entry)
     return cubic_residue_cache_size, cube_root_cache_size
-
 
 # =============================================================================
 # Per-process cached cubic residue symbol
@@ -271,7 +272,7 @@ _CUBIC_RESIDUE_CACHED = None
 _CUBIC_RESIDUE_SYMBOL = None
 
 
-def _init_worker_caches(cache_fraction):
+def _init_worker_caches(cache_fraction, num_processes=1):
     """
     Initialize per-process cached arithmetic for cubic residue evaluation.
 
@@ -285,7 +286,7 @@ def _init_worker_caches(cache_fraction):
     if _CUBIC_RESIDUE_SYMBOL is not None:
         return
 
-    cubic_residue_cache_size, cube_root_cache_size = compute_cache_limits(cache_fraction)
+    cubic_residue_cache_size, cube_root_cache_size = compute_cache_limits(cache_fraction, num_processes)
 
     @lru_cache(maxsize=cube_root_cache_size)
     def cube_root_data(p):
@@ -347,6 +348,102 @@ def _init_worker_caches(cache_fraction):
 # =============================================================================
 # Worker
 # =============================================================================
+def iter_tasks(B_max, batch_size, min_height, max_height, forbidden_prime_product, cache_fraction, num_processes):
+    for start in range(2, B_max + 1, batch_size):
+        end = min(start + batch_size, B_max + 1)
+        B_values = [B for B in range(start, end) if gcd(B, forbidden_prime_product) == 1]
+        if B_values:
+            # include range info for logging without indexing into tasks[]
+            yield (B_values, min_height, max_height, forbidden_prime_product, cache_fraction, B_values[0], B_values[-1], num_processes)
+
+
+def iter_tasks(
+    B_max,
+    batch_size_smallB,
+    batch_size_largeB,
+    min_height,
+    max_height,
+    forbidden_prime_product,
+    cache_fraction,
+    num_processes,
+    B_start=2,
+    split_B=None,
+):
+    """
+    Like your original iter_tasks, but uses two different batch sizes:
+      - batch_size_smallB for B < split_B
+      - batch_size_largeB for B >= split_B
+
+    Default split_B is min_height^3 (the point where your code switches from
+    A_lower = min_height to A_lower = 1).
+    """
+    if split_B is None:
+        split_B = int(min_height) ** 3
+
+    B_end = min(int(B_max), int(max_height) ** 3)  # safety; B_max should already be max_height^3
+    B = int(B_start)
+
+    while B <= B_end:
+        current_batch_size = batch_size_smallB if B < split_B else batch_size_largeB
+        end = min(B + int(current_batch_size), B_end + 1)
+
+        B_values = [x for x in range(B, end) if gcd(x, forbidden_prime_product) == 1]
+        if B_values:
+            yield (
+                B_values,
+                min_height,
+                max_height,
+                forbidden_prime_product,
+                cache_fraction,
+                B_values[0],
+                B_values[-1],
+                num_processes,
+            )
+
+        B = end
+
+
+
+def count_batches(
+    B_max,
+    batch_size_smallB,
+    batch_size_largeB,
+    min_height,
+    forbidden_prime_product,
+    B_start=2,
+    split_B=None,
+):
+    """
+    Count how many *nonempty* batches iter_tasks_two will yield,
+    using the same partition of [B_start, B_max].
+
+    A batch is counted if it contains at least one B with gcd(B, forbidden)=1.
+    """
+    if split_B is None:
+        split_B = int(min_height) ** 3
+
+    B_end = int(B_max)
+    B = int(B_start)
+    n_batches = 0
+
+    while B <= B_end:
+        current_batch_size = batch_size_smallB if B < split_B else batch_size_largeB
+        end = min(B + int(current_batch_size), B_end + 1)
+
+        # Does this interval contain any admissible B?
+        has_any = False
+        for x in range(B, end):
+            if gcd(x, forbidden_prime_product) == 1:
+                has_any = True
+                break
+
+        if has_any:
+            n_batches += 1
+
+        B = end
+
+    return n_batches
+
 
 def worker_process(task_args):
     """
@@ -358,7 +455,8 @@ def worker_process(task_args):
     Parameters
     ----------
     task_args : tuple
-        (B_values, min_height, max_height, forbidden_prime_product, cache_fraction)
+        (B_values, min_height, max_height, forbidden_prime_product, cache_fraction, 
+        B_min, B_max, num_processes)
 
     Returns
     -------
@@ -374,9 +472,12 @@ def worker_process(task_args):
         max_height,
         forbidden_prime_product,
         cache_fraction,
+        B_min,
+        B_max,
+        num_processes,
     ) = task_args
 
-    _init_worker_caches(cache_fraction)
+    _init_worker_caches(cache_fraction, num_processes)
     cubic_residue_symbol = _CUBIC_RESIDUE_SYMBOL
 
     counts = defaultdict(int)
@@ -410,7 +511,7 @@ def worker_process(task_args):
                 key = compute_selmer_matrix(B_value, B_factorization, A_value, cubic_residue_symbol)
                 counts[key] += 1
 
-    return [
+    return B_min, B_max, [
         {"pair": [int(r), int(c)], "matrix": m, "count": int(k)}
         for (r, c, m), k in counts.items()
     ]
@@ -530,7 +631,8 @@ def aggregate_main_file(output_file):
 # =============================================================================
 
 def run_parallel(min_height, max_height, forbidden_prime_product, output_file,
-                 batch_size=10, aggregate_every=10, cache_fraction=0.5, num_processes=None):
+                 batch_size_smallB=1000, batch_size_largeB=10, aggregate_every=5, log_every=1,
+                 cache_fraction=0.5, num_processes=None):
     """
     Run the computation in parallel using a process pool.
 
@@ -560,16 +662,29 @@ def run_parallel(min_height, max_height, forbidden_prime_product, output_file,
 
     B_max = max_height ** 3
 
+    total_batches = count_batches(
+        B_max=B_max,
+        batch_size_smallB=batch_size_smallB,  
+        batch_size_largeB=batch_size_largeB,
+        forbidden_prime_product=forbidden_prime_product,
+        min_height=min_height
+    )
+
+    print(f"[info] total nonempty batches: {total_batches}")
+
     # Construct tasks: each task is one batch of admissible B values.
-    tasks = []
-    for start in range(2, B_max + 1, batch_size):
-        end = min(start + batch_size, B_max + 1)
-        B_values = [
-            B for B in range(start, end)
-            if gcd(B, forbidden_prime_product) == 1
-        ]
-        if B_values:
-            tasks.append((B_values, min_height, max_height, forbidden_prime_product, cache_fraction))
+    task_iter = iter_tasks(
+    B_max=B_max,
+    batch_size_smallB=batch_size_smallB,   # e.g. small B: bigger batches
+    batch_size_largeB=batch_size_largeB,     # e.g. large B: smaller batches
+    min_height=min_height,
+    max_height=max_height,
+    forbidden_prime_product=forbidden_prime_product,
+    cache_fraction=cache_fraction,
+    num_processes=num_processes,
+    B_start=2
+    )
+
 
     output_path = Path(output_file)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -577,9 +692,11 @@ def run_parallel(min_height, max_height, forbidden_prime_product, output_file,
     temp_dir.mkdir(exist_ok=True)
 
     temp_files = []
-
+    
     with mp.Pool(processes=num_processes) as pool:
-        for task_id, result in enumerate(pool.imap_unordered(worker_process, tasks, chunksize=1)):
+        for task_id, (B_min, B_max_batch, result) in enumerate(
+                pool.imap_unordered(worker_process, task_iter, chunksize=1),
+                start=1):
             temp_path = temp_dir / f"{output_path.stem}_task{task_id}.tmp"
             temp_files.append(temp_path)
 
@@ -587,9 +704,16 @@ def run_parallel(min_height, max_height, forbidden_prime_product, output_file,
                 for rec in result:
                     f.write(json.dumps(rec) + "\n")
 
-            if (task_id + 1) % aggregate_every == 0:
+            if task_id % aggregate_every == 0:
                 aggregate_temp_files(temp_files, output_path)
                 temp_files = []
+
+            if task_id % log_every == 1:
+                print(
+                    f"[progress] completed {task_id}/{total_batches} batches"
+                    f"(B in [{B_min}, {B_max_batch}])"
+                )
+                
 
     if temp_files:
         aggregate_temp_files(temp_files, output_path)
@@ -623,7 +747,7 @@ def run_non_parallel(min_height, max_height, forbidden_prime_product, output_fil
         B_values = [B for B in range(start, end) if gcd(B, forbidden_prime_product) == 1]
         if not B_values:
             continue
-
+            
         for B_value in B_values:
             B_factorization = list(factor(B_value))
 
@@ -697,6 +821,11 @@ if __name__ == "__main__":
 
     output_file = f"data/output_{args.min_height}_output_{args.max_height}.jsonl"
 
+
+    batch_size_smallB=10000
+    batch_size_largeB=100
+    log_every = 50
+    
     if args.debug:
         import cProfile
         import pstats
@@ -707,9 +836,10 @@ if __name__ == "__main__":
                 max_height=args.max_height,
                 forbidden_prime_product=forbidden_prime_product,
                 output_file=output_file,
-                batch_size=10,
+                batch_size=batch_size,
                 aggregate_every=10,
                 cache_fraction=0.5,
+                log_every=log_every,
                 num_processes=args.nprocesses,
             )
 
@@ -722,9 +852,11 @@ if __name__ == "__main__":
             max_height=args.max_height,
             forbidden_prime_product=forbidden_prime_product,
             output_file=output_file,
-            batch_size=10,
+            batch_size_smallB=batch_size_smallB, 
+            batch_size_largeB=batch_size_largeB,
             aggregate_every=10,
             cache_fraction=0.5,
+            log_every=log_every,
             num_processes=args.nprocesses,
         )
     
