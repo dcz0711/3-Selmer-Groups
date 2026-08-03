@@ -110,7 +110,7 @@ def generate_random_a(b_value, height, delta=0.1,  method="height"):
     result = (low + int((high - low) * random.random())) * sign
         
     # Ensure result is coprime to 3
-    if result % 3 != 0:
+    if result % 3 == 0:
         result += random.choice([1,-1])
     
     return result
