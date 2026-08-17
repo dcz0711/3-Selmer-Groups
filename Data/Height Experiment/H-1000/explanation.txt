@@ -1,0 +1,4 @@
+All elliptic curves with:
+- max(|A|^3, |B|) in [1000^3, 1010^3]
+- good reduction at all primes <100, <300, <500, <800 depending on file name
+- A^3 - 27B and B not cubes (so the 3-isogeny class of E has just E and E')

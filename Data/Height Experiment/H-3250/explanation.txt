@@ -1,0 +1,4 @@
+All elliptic curves with:
+- max(|A|^3, |B|) in [3250^3, 3260^3]
+- good reduction at all primes <1000
+- A^3 - 27B and B not cubes (so the 3-isogeny class of E has just E and E')
