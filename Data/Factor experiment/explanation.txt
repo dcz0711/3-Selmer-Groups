@@ -1,0 +1,2 @@
+File naming convention indicates N and n.
+Multiple files with the same N and n indicates that the experiment took place independently on several occasions. Data was merged when creating tables in the paper
