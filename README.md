@@ -192,9 +192,9 @@ modulo 3, as in Definition 3.8.
 For a stored a-by-b matrix of rank r over GF(3), Theorem 3.9 and Corollary 3.11 give
 
 $$
-\dim\operatorname{Sel}^{\hat\phi}(E'_{A,B})=b-r+1,
+\dim\mathrm{Sel}^{\hat\phi}(E'_{A,B})=b-r+1,
 \qquad
-\dim\operatorname{Sel}^{\phi}(E_{A,B})=a-r.
+\dim\mathrm{Sel}^{\phi}(E_{A,B})=a-r.
 $$
 
 The optional `selmer_ranks(A, B)` helper computes the full matrix and returns
