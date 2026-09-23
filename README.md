@@ -6,9 +6,9 @@ Dongchen Zou.
 
 The code studies the curves
 
-\[
+$$
 E_{A,B}: y^2 + Axy + By = x^3
-\]
+$$
 
 and constructs the reduced cubic-residue matrix $M'_{A,B}$ over $\mathbf F_3$
 defined in Section 3 of the paper. Section 5 describes two experiments:
