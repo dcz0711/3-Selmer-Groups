@@ -70,9 +70,9 @@ sage 3-selmer-height.sage \
 The paper defines $H(E_{A,B})=\max(|A|^3,B)$. The CLI takes **cube-root height
 bounds**: `--min_height h0 --max_height h1` enumerates
 
-\[
+$$
 h_0^3 \le H(E_{A,B}) \le h_1^3.
-\]
+$$
 
 Bounds are inclusive. The code uses $B>0$, both signs of nonzero $A$, and rejects
 pairs with $p\mid A$ and $p^3\mid B$. It excludes cubes $B$ and $A^3-27B$.
@@ -191,11 +191,11 @@ modulo 3, as in Definition 3.8.
 
 For a stored a-by-b matrix of rank r over GF(3), Theorem 3.9 and Corollary 3.11 give
 
-\[
+$$
 \dim\operatorname{Sel}^{\hat\phi}(E'_{A,B})=b-r+1,
 \qquad
 \dim\operatorname{Sel}^{\phi}(E_{A,B})=a-r.
-\]
+$$
 
 The optional `selmer_ranks(A, B)` helper computes the full matrix and returns
 these two dimensions in the order `(phi_dimension, dual_phi_dimension)`, under
@@ -250,7 +250,7 @@ records by dimensions a-by-b, use `count` as the weight, and let
 $K=3^{ab}$, $T=\sum_M C_M$, and $\mu=T/K$. Include all K possible matrices in the
 formulas, assigning count zero to unobserved matrices.
 
-\[
+$$
 \mathrm{SD}_{\mathrm{obs}}=
 \sqrt{\frac{1}{K}\sum_M(C_M-\mu)^2},
 \qquad
@@ -258,7 +258,7 @@ formulas, assigning count zero to unobserved matrices.
 \sqrt{\frac{T}{K}\left(1-\frac{1}{K}\right)},
 \qquad
 \mathrm{MSE}=\frac{\mathrm{SD}_{\mathrm{obs}}^2}{T^2}.
-\]
+$$
 
 Report the SD ratio, minimum and maximum counts, and percentage deviations
 `100 * (count / mu - 1)`. An unobserved matrix makes the minimum count zero.
